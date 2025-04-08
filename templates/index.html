@@ -1,21 +1,18 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Video to PDF</title>
+    <title>YouTube to PDF</title>
 </head>
 <body>
     <h1>Convert YouTube Video to PDF</h1>
+    <form method="POST">
+        <label>Enter YouTube URL:</label><br>
+        <input type="text" name="url" style="width: 400px;"><br><br>
+        <input type="submit" value="Submit">
+    </form>
 
     {% if message %}
-        <p style="color:red;">{{ message }}</p>
+        <p style="color: red;">{{ message }}</p>
     {% endif %}
-
-    <form method="POST">
-        <label for="url">Enter YouTube URL:</label>
-        <input type="text" id="url" name="url" required>
-        <button type="submit">Submit</button>
-    </form>
 </body>
 </html>

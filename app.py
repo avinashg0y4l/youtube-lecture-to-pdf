@@ -1,4 +1,4 @@
-from flask import Flask, request, render_template, send_file, redirect, url_for
+from flask import Flask, request, render_template, send_file
 import tempfile
 import os
 import re
@@ -7,42 +7,40 @@ from PIL import Image
 import yt_dlp
 import cv2
 from skimage.metrics import structural_similarity as compare_ssim
-#from youtube_transcript_api import YouTubeTranscriptApi
-#from google.colab import files
+from io import BytesIO
 
 app = Flask(__name__)
 
-# Helper functions from the previous code
+# ---------- Helper Functions ----------
+
 def download_video(url, output_file):
     if os.path.exists(output_file):
         os.remove(output_file)
     ydl_opts = {
         'outtmpl': output_file,
         'format': 'best',
+        'quiet': True,
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
 
 def get_video_id(url):
-    video_id_match = re.search(r"shorts\/(\w+)", url)
-    if video_id_match:
-        return video_id_match.group(1)
-    video_id_match = re.search(r"youtu\.be\/([\w\-_]+)(\?.*)?", url)
-    if video_id_match:
-        return video_id_match.group(1)
-    video_id_match = re.search(r"v=([\w\-_]+)", url)
-    if video_id_match:
-        return video_id_match.group(1)
-    video_id_match = re.search(r"live\/(\w+)", url)
-    if video_id_match:
-        return video_id_match.group(1)
+    patterns = [
+        r"shorts\/(\w+)",
+        r"youtu\.be\/([\w\-_]+)(\?.*)?",
+        r"v=([\w\-_]+)",
+        r"live\/(\w+)"
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
     return None
 
 def extract_unique_frames(video_file, output_folder, n=3, ssim_threshold=0.8):
     cap = cv2.VideoCapture(video_file)
     fps = int(cap.get(cv2.CAP_PROP_FPS))
     last_frame = None
-    saved_frame = None
     frame_number = 0
     last_saved_frame_number = -1
     timestamps = []
@@ -58,16 +56,11 @@ def extract_unique_frames(video_file, output_folder, n=3, ssim_threshold=0.8):
 
             if last_frame is not None:
                 similarity = compare_ssim(gray_frame, last_frame, data_range=gray_frame.max() - gray_frame.min())
-                if similarity < ssim_threshold:
-                    if saved_frame is not None and frame_number - last_saved_frame_number > fps:
-                        frame_path = os.path.join(output_folder, f'frame{frame_number:04d}_{frame_number // fps}.png')
-                        cv2.imwrite(frame_path, saved_frame)
-                        timestamps.append((frame_number, frame_number // fps))
-
-                    saved_frame = frame
+                if similarity < ssim_threshold and (frame_number - last_saved_frame_number > fps):
+                    frame_path = os.path.join(output_folder, f'frame{frame_number:04d}_{frame_number // fps}.png')
+                    cv2.imwrite(frame_path, frame)
+                    timestamps.append((frame_number, frame_number // fps))
                     last_saved_frame_number = frame_number
-                else:
-                    saved_frame = frame
             else:
                 frame_path = os.path.join(output_folder, f'frame{frame_number:04d}_{frame_number // fps}.png')
                 cv2.imwrite(frame_path, frame)
@@ -81,22 +74,25 @@ def extract_unique_frames(video_file, output_folder, n=3, ssim_threshold=0.8):
     cap.release()
     return timestamps
 
-def convert_frames_to_pdf(input_folder, output_file, timestamps):
-    frame_files = sorted(os.listdir(input_folder), key=lambda x: int(x.split('_')[0].split('frame')[-1]))
+def convert_frames_to_pdf(input_folder, output_buffer, timestamps):
+    frame_files = sorted(os.listdir(input_folder), key=lambda x: int(x.split('_')[0].replace('frame', '')))
     pdf = FPDF("L")
     pdf.set_auto_page_break(0)
 
-    for i, (frame_file, (frame_number, timestamp_seconds)) in enumerate(zip(frame_files, timestamps)):
+    for frame_file, (frame_number, timestamp_seconds) in zip(frame_files, timestamps):
         frame_path = os.path.join(input_folder, frame_file)
         image = Image.open(frame_path)
         pdf.add_page()
         pdf.image(frame_path, x=0, y=0, w=pdf.w, h=pdf.h)
 
+        # Format timestamp
         timestamp = f"{timestamp_seconds // 3600:02d}:{(timestamp_seconds % 3600) // 60:02d}:{timestamp_seconds % 60:02d}"
 
+        # Determine text color based on brightness
         x, y, width, height = 5, 5, 60, 15
         region = image.crop((x, y, x + width, y + height)).convert("L")
         mean_pixel_value = region.resize((1, 1)).getpixel((0, 0))
+
         if mean_pixel_value < 64:
             pdf.set_text_color(255, 255, 255)
         else:
@@ -106,51 +102,68 @@ def convert_frames_to_pdf(input_folder, output_file, timestamps):
         pdf.set_font("Arial", size=12)
         pdf.cell(0, 0, timestamp)
 
-    pdf.output(output_file)
+    pdf_bytes = pdf.output(dest='S').encode('latin-1')  # PDF as bytes
+    output_buffer.write(pdf_bytes)
+    output_buffer.seek(0)
 
 def get_video_title(url):
     ydl_opts = {
         'skip_download': True,
-        'ignoreerrors': True
+        'ignoreerrors': True,
+        'quiet': True,
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        video_info = ydl.extract_info(url, download=False)
-        title = video_info['title'].replace('/', '-').replace('\\', '-').replace(':', '-').replace('*', '-').replace('?', '-').replace('<', '-').replace('>', '-').replace('|', '-').replace('"', '-').strip('.')
-        return title
+        info = ydl.extract_info(url, download=False)
+        title = info.get('title', 'video').strip()
+        for char in r'\/:*?"<>|':
+            title = title.replace(char, '-')
+        return title.strip('.')
 
+# ---------- Routes ----------
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
-        url = request.form['url']
+        url = request.form.get('url')
         if not url:
             return render_template('index.html', message="Please provide a YouTube URL.")
-        
+
         try:
             video_id = get_video_id(url)
             if not video_id:
-                return render_template('index.html', message="Invalid URL.")
-            
+                return render_template('index.html', message="Invalid YouTube URL.")
+
             video_title = get_video_title(url)
-            video_file = f"{video_title}.mp4"
+            sanitized_title = video_title.replace(" ", "_")
+            video_file = os.path.join(tempfile.gettempdir(), f"{sanitized_title}.mp4")
+
+            # Download the YouTube video
             download_video(url, video_file)
 
-            output_pdf_filename = f"{video_title}.pdf"
-
+            # Frame extraction and PDF generation
             with tempfile.TemporaryDirectory() as tmp_dir:
-                frames_folder = os.path.join(tmp_dir, "frames")
-                os.makedirs(frames_folder)
+                frame_folder = os.path.join(tmp_dir, "frames")
+                os.makedirs(frame_folder)
 
-                timestamps = extract_unique_frames(video_file, frames_folder)
-                convert_frames_to_pdf(frames_folder, output_pdf_filename, timestamps)
+                timestamps = extract_unique_frames(video_file, frame_folder)
 
-            return send_file(output_pdf_filename, as_attachment=True)
+                pdf_buffer = BytesIO()
+                convert_frames_to_pdf(frame_folder, pdf_buffer, timestamps)
+
+            os.remove(video_file)
+
+            return send_file(
+                pdf_buffer,
+                mimetype='application/pdf',
+                as_attachment=True,
+                download_name=f"{sanitized_title}.pdf"
+            )
 
         except Exception as e:
             return render_template('index.html', message=f"An error occurred: {str(e)}")
 
     return render_template('index.html')
 
-
+# ---------- Run the App ----------
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
