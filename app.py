@@ -8,19 +8,26 @@ import yt_dlp
 import cv2
 from skimage.metrics import structural_similarity as compare_ssim
 from io import BytesIO
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
+app.config['UPLOAD_FOLDER'] = tempfile.gettempdir()
 
 # ---------- Helper Functions ----------
 
-def download_video(url, output_file):
+def download_video(url, output_file, cookie_path=None):
     if os.path.exists(output_file):
         os.remove(output_file)
+
     ydl_opts = {
         'outtmpl': output_file,
         'format': 'best',
-        'quiet': True,
+        'quiet': True
     }
+
+    if cookie_path:
+        ydl_opts['cookiefile'] = cookie_path
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
 
@@ -102,18 +109,23 @@ def convert_frames_to_pdf(input_folder, output_buffer, timestamps):
         pdf.set_font("Arial", size=12)
         pdf.cell(0, 0, timestamp)
 
-    pdf_bytes = pdf.output(dest='S').encode('latin-1')  # PDF as bytes
+    pdf_bytes = pdf.output(dest='S').encode('latin-1')
     output_buffer.write(pdf_bytes)
     output_buffer.seek(0)
 
-def get_video_title(url):
+def get_video_title(url, cookie_path=None):
     ydl_opts = {
         'skip_download': True,
         'ignoreerrors': True,
         'quiet': True,
     }
+    if cookie_path:
+        ydl_opts['cookiefile'] = cookie_path
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
+        if not info:
+            return "video"
         title = info.get('title', 'video').strip()
         for char in r'\/:*?"<>|':
             title = title.replace(char, '-')
@@ -125,20 +137,29 @@ def get_video_title(url):
 def index():
     if request.method == 'POST':
         url = request.form.get('url')
+        cookie_file = request.files.get('cookie_file')
+
         if not url:
             return render_template('index.html', message="Please provide a YouTube URL.")
+
+        # Save cookies if uploaded
+        cookie_path = None
+        if cookie_file and cookie_file.filename.endswith('.txt'):
+            filename = secure_filename(cookie_file.filename)
+            cookie_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            cookie_file.save(cookie_path)
 
         try:
             video_id = get_video_id(url)
             if not video_id:
                 return render_template('index.html', message="Invalid YouTube URL.")
 
-            video_title = get_video_title(url)
+            video_title = get_video_title(url, cookie_path)
             sanitized_title = video_title.replace(" ", "_")
             video_file = os.path.join(tempfile.gettempdir(), f"{sanitized_title}.mp4")
 
             # Download the YouTube video
-            download_video(url, video_file)
+            download_video(url, video_file, cookie_path)
 
             # Frame extraction and PDF generation
             with tempfile.TemporaryDirectory() as tmp_dir:
@@ -151,6 +172,8 @@ def index():
                 convert_frames_to_pdf(frame_folder, pdf_buffer, timestamps)
 
             os.remove(video_file)
+            if cookie_path and os.path.exists(cookie_path):
+                os.remove(cookie_path)
 
             return send_file(
                 pdf_buffer,
