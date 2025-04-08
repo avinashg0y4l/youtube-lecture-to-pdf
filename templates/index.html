@@ -2,55 +2,20 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>YouTube Frame to PDF</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 40px;
-            background-color: #f2f2f2;
-        }
-        .container {
-            background: white;
-            padding: 30px;
-            border-radius: 10px;
-            width: 500px;
-            margin: auto;
-            box-shadow: 0px 0px 10px #ccc;
-        }
-        input[type="text"] {
-            width: 100%;
-            padding: 12px;
-            margin-top: 10px;
-            margin-bottom: 20px;
-            border: 1px solid #ccc;
-            border-radius: 6px;
-        }
-        button {
-            padding: 10px 20px;
-            background-color: #4285F4;
-            border: none;
-            border-radius: 6px;
-            color: white;
-            font-size: 16px;
-            cursor: pointer;
-        }
-        .msg {
-            margin-top: 15px;
-            color: red;
-        }
-    </style>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video to PDF</title>
 </head>
 <body>
-    <div class="container">
-        <h2>YouTube Frame to PDF</h2>
-        <form method="POST">
-            <label for="url">Enter YouTube Video URL:</label>
-            <input type="text" name="url" placeholder="https://www.youtube.com/watch?v=..." required>
-            <button type="submit">Generate PDF</button>
-        </form>
-        {% if message %}
-        <div class="msg">{{ message }}</div>
-        {% endif %}
-    </div>
+    <h1>Convert YouTube Video to PDF</h1>
+
+    {% if message %}
+        <p style="color:red;">{{ message }}</p>
+    {% endif %}
+
+    <form method="POST">
+        <label for="url">Enter YouTube URL:</label>
+        <input type="text" id="url" name="url" required>
+        <button type="submit">Submit</button>
+    </form>
 </body>
 </html>
